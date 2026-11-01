@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
 Avisa por Gmail cuando usuarios específicos de Roblox pasan a estar conectados.
-
+ 
 Uso:
   python roblox_notifier.py          # una sola revisión (ideal para GitHub Actions / cron)
   python roblox_notifier.py --loop   # revisa cada POLL_SECONDS (ideal para una VM / Raspberry)
-
+ 
 Variables de entorno necesarias:
   GMAIL_USER          tu dirección de Gmail (remitente)
   GMAIL_APP_PASSWORD  contraseña de aplicación de Google (requiere verificación en 2 pasos)
@@ -19,32 +19,33 @@ import sys
 import time
 from email.message import EmailMessage
 from pathlib import Path
-
+ 
 import requests
-
+ 
 # ----------------------------------------------------------------------------
 # CONFIGURACIÓN (usuarios hardcodeados: {userId: "nombre para el correo"})
 # El userId lo ves en la URL del perfil: roblox.com/users/<ID>/profile
 # ----------------------------------------------------------------------------
 USERS = {
-    1: "Roblox",
-    156: "builderman",
+    138778630: "McKyami",
+    858250928: "AnaB_128",
+    377176745: "Butter",
 }
 POLL_SECONDS = 300  # 5 min. No bajes de 60 s: es una API con límite de peticiones.
 STATE_FILE = Path(__file__).with_name("state.json")
-
+ 
 PRESENCE_URL = "https://presence.roblox.com/v1/presence/users"
 STATUS = {0: "Desconectado", 1: "En línea", 2: "Jugando", 3: "En Roblox Studio"}
 HEADERS = {
     "Content-Type": "application/json",
     "User-Agent": "personal-presence-notifier/1.0 (uso personal, 1 consulta cada 5 min)",
 }
-
-
+ 
+ 
 def log(msg: str) -> None:
     print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}", flush=True)
-
-
+ 
+ 
 # ----------------------------------------------------------------------------
 # Roblox
 # ----------------------------------------------------------------------------
@@ -54,33 +55,33 @@ def fetch_presence(user_ids: list[int]) -> dict[int, dict]:
     cookie = os.environ.get("ROBLOX_COOKIE")
     cookies = {".ROBLOSECURITY": cookie} if cookie else None
     body = {"userIds": user_ids}
-
+ 
     for attempt in range(4):
         r = requests.post(PRESENCE_URL, json=body, headers=headers, cookies=cookies, timeout=20)
-
+ 
         if r.status_code == 200:
             return {p["userId"]: p for p in r.json().get("userPresences", [])}
-
+ 
         if r.status_code == 403 and "x-csrf-token" in r.headers:
             headers["x-csrf-token"] = r.headers["x-csrf-token"]  # flujo normal de Roblox
             continue
-
+ 
         if r.status_code == 429:  # límite de peticiones: respetar y esperar
             wait = int(r.headers.get("Retry-After", 2 ** (attempt + 4)))
             log(f"429 Too Many Requests, esperando {wait}s")
             time.sleep(wait)
             continue
-
+ 
         if r.status_code in (401, 403):
             raise RuntimeError(
                 f"Roblox respondió {r.status_code}: este endpoint puede exigir autenticación. "
                 f"Detalle: {r.text[:200]}"
             )
         r.raise_for_status()
-
+ 
     raise RuntimeError("No se pudo consultar Roblox tras varios intentos")
-
-
+ 
+ 
 # ----------------------------------------------------------------------------
 # Gmail
 # ----------------------------------------------------------------------------
@@ -89,14 +90,14 @@ def send_email(subject: str, body: str) -> None:
     password = os.environ["GMAIL_APP_PASSWORD"]
     msg = EmailMessage()
     msg["From"] = user
-    msg["To"] = os.environ.get("MAIL_TO", user)
+    msg["To"] = os.environ.get("MAIL_TO") or user
     msg["Subject"] = subject
     msg.set_content(body)
     with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=30) as smtp:
         smtp.login(user, password)
         smtp.send_message(msg)
-
-
+ 
+ 
 # ----------------------------------------------------------------------------
 # Lógica
 # ----------------------------------------------------------------------------
@@ -105,17 +106,17 @@ def load_state() -> dict[str, bool]:
         return json.loads(STATE_FILE.read_text())
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
-
-
+ 
+ 
 def save_state(state: dict[str, bool]) -> None:
     STATE_FILE.write_text(json.dumps(state, indent=2, sort_keys=True))
-
-
+ 
+ 
 def run_once() -> None:
     presences = fetch_presence(list(USERS))
     state = load_state()
     new_state = dict(state)
-
+ 
     for uid, name in USERS.items():
         p = presences.get(uid)
         if p is None:
@@ -123,7 +124,7 @@ def run_once() -> None:
         online = p.get("userPresenceType", 0) != 0
         was_online = state.get(str(uid), False)
         new_state[str(uid)] = online
-
+ 
         if online and not was_online:  # solo avisa en la transición desconectado -> conectado
             estado = STATUS.get(p["userPresenceType"], "Conectado")
             lugar = p.get("lastLocation") or "—"
@@ -138,11 +139,11 @@ def run_once() -> None:
             )
         elif not online and was_online:
             log(f"{name} se desconectó")
-
+ 
     if new_state != state:
         save_state(new_state)
-
-
+ 
+ 
 def main() -> None:
     if "--loop" not in sys.argv:
         run_once()
@@ -156,7 +157,7 @@ def main() -> None:
             log(f"Error: {e}")
             backoff = min(backoff * 2, 3600)
         time.sleep(backoff)
-
-
+ 
+ 
 if __name__ == "__main__":
     main()
