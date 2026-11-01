@@ -30,6 +30,7 @@ USERS = {
     138778630: "McKyami",
     858250928: "AnaB_128",
     377176745: "Butter",
+    135600010: "Gamer",
 }
 POLL_SECONDS = 300  # 5 min. No bajes de 60 s: es una API con límite de peticiones.
 STATE_FILE = Path(__file__).with_name("state.json")
