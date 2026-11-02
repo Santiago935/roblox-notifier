@@ -87,29 +87,44 @@ def fetch_presence(user_ids: list[int]) -> dict[int, dict]:
 # Gmail
 # ----------------------------------------------------------------------------
 def send_email(subject: str, body: str) -> None:
-    user = os.environ["GMAIL_USER"]
-    password = os.environ["GMAIL_APP_PASSWORD"]
+    user = os.environ["GMAIL_USER"].strip()
+    password = "".join(os.environ["GMAIL_APP_PASSWORD"].split())  # quita espacios/saltos de línea
     msg = EmailMessage()
     msg["From"] = user
-    msg["To"] = os.environ.get("MAIL_TO") or user
+    msg["To"] = (os.environ.get("MAIL_TO") or user).strip()
     msg["Subject"] = subject
     msg.set_content(body)
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=30) as smtp:
-        smtp.login(user, password)
-        smtp.send_message(msg)
+ 
+    # Intento 1: SSL directo (465). Intento 2: STARTTLS (587), por si Google corta el primero.
+    last_error: Exception | None = None
+    for port in (465, 587):
+        try:
+            if port == 465:
+                smtp = smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=30)
+            else:
+                smtp = smtplib.SMTP("smtp.gmail.com", 587, timeout=30)
+                smtp.starttls()
+            with smtp:
+                smtp.login(user, password)
+                smtp.send_message(msg)
+            return
+        except (smtplib.SMTPServerDisconnected, OSError) as e:
+            log(f"Gmail puerto {port} falló: {e}")
+            last_error = e
+    raise RuntimeError(f"No se pudo enviar el correo por Gmail: {last_error}")
  
  
 # ----------------------------------------------------------------------------
 # Lógica
 # ----------------------------------------------------------------------------
-def load_state() -> dict[str, bool]:
+def load_state() -> dict:
     try:
         return json.loads(STATE_FILE.read_text())
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
  
  
-def save_state(state: dict[str, bool]) -> None:
+def save_state(state: dict) -> None:
     STATE_FILE.write_text(json.dumps(state, indent=2, sort_keys=True))
  
  
@@ -121,13 +136,21 @@ def run_once() -> None:
     for uid, name in USERS.items():
         p = presences.get(uid)
         if p is None:
+            log(f"{name} ({uid}): sin datos en la respuesta de Roblox")
             continue
-        online = p.get("userPresenceType", 0) != 0
-        was_online = state.get(str(uid), False)
+ 
+        ptype = p.get("userPresenceType", 0)
+        online = ptype != 0
+        was_online = bool(state.get(str(uid), False))
+        last_online = p.get("lastOnline")
+ 
+        # Diagnóstico: una línea por usuario en cada corrida
+        log(f"{name} ({uid}): {STATUS.get(ptype, ptype)} | lastOnline={last_online}")
+ 
         new_state[str(uid)] = online
  
-        if online and not was_online:  # solo avisa en la transición desconectado -> conectado
-            estado = STATUS.get(p["userPresenceType"], "Conectado")
+        if online and not was_online:  # desconectado -> conectado
+            estado = STATUS.get(ptype, "Conectado")
             lugar = p.get("lastLocation") or "—"
             log(f"{name} se conectó ({estado})")
             send_email(
